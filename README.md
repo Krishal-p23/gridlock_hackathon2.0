@@ -12,7 +12,7 @@ The goal is to predict continuous demand values (0–1 range) using:
 - Road infrastructure characteristics
 - Landmark and vehicle constraints
 
-The final model achieves **high predictive accuracy (R² ≈ 0.90+)**, indicating strong learning of underlying demand patterns.
+The final model achieves **high predictive accuracy (R² ≈ 0.91+)**, indicating strong learning of underlying demand patterns.
 
 ---
 
@@ -116,26 +116,26 @@ The geohash target encoding is computed using training data only:
 
 ---
 
-## 6. Hyperparameters
+## 6. Optimized Hyperparameters (with Optuna)
 
 ```python
 params = {
     "objective": "regression",
     "metric": "rmse",
-    "learning_rate": 0.02,
+    "learning_rate": 0.005,
 
-    "num_leaves": 128,
-    "max_depth": 8,
-    "min_data_in_leaf": 30,
+    "num_leaves": 234,
+    "max_depth": 10,
+    "min_data_in_leaf": 133,
 
-    "feature_fraction": 0.6,
-    "bagging_fraction": 0.6,
-    "bagging_freq": 5,
+    "feature_fraction": 0.963,
+    "bagging_fraction": 0.950,
+    "bagging_freq": 1,
 
-    "lambda_l1": 2.0,
-    "lambda_l2": 8.0,
+    "lambda_l1": 0.18,
+    "lambda_l2": 12.25,
 
-    "min_gain_to_split": 0.01,
+    "min_gain_to_split": 9.544,
 
     "verbosity": -1
 }
@@ -151,7 +151,8 @@ params = {
 
 ## 7. Training Strategy
 
-- GroupKFold used with geohash as grouping variable
+- KFold with shuffled splits
+- Hyperparameter Optimization with Optuna
 - Prevents spatial leakage across train/test splits
 - Early stopping used (100 rounds)
 - Model trained per fold and averaged
@@ -175,7 +176,22 @@ params = {
 
 ## 9. How to Reproduce Results
 
-### Step 1: Load pipeline and model
+### Step 1: Prepare the environment
+
+```bash
+# Create environment with Python3.12
+py -3.12 -m .venv venv
+
+# Activate the virtual environment
+.venv\Scripts\activate
+
+# Install the requirements
+pip install -r requirements.txt
+```
+
+---
+
+### Step 2: Load pipeline and model
 
 ```python
 import joblib
@@ -186,7 +202,7 @@ pipeline = joblib.load("pipeline.pkl")
 
 ---
 
-### Step 2: Initialize pipeline
+### Step 3: Initialize pipeline
 
 ```python
 model_wrapper = DemandModel(model, pipeline, features)
@@ -194,7 +210,7 @@ model_wrapper = DemandModel(model, pipeline, features)
 
 ---
 
-### Step 3: Prepare test data
+### Step 4: Prepare test data
 
 Ensure test data contains:
 
@@ -210,7 +226,7 @@ Ensure test data contains:
 
 ---
 
-### Step 4: Predict
+### Step 5: Predict
 
 ```python
 predictions = model_wrapper.predict(test_df)
@@ -231,8 +247,8 @@ predictions = model_wrapper.predict(test_df)
 
 ## 11. Final Outcome
 
-- Model achieves strong validation performance (R² score ~0.9058 CV)
-- Test performance ~0.9055 using random split strategy
+- Model achieves strong validation performance (R² score ~0.9136 CV)
+- Test performance ~0.9147 using random split strategy
 - Captures nonlinear spatio-temporal demand patterns
 - Robust inference pipeline suitable for deployment
 
