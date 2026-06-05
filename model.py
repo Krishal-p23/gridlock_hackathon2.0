@@ -7,11 +7,12 @@ from feature_pipeline import DemandFeaturePipeline
 
 class DemandModel:
 
-    def __init__(self, params):
+    def __init__(self, params, verbose=False):
         self.pipeline = DemandFeaturePipeline()
         self.model = None
         self.params = params
         self.cat_cols = None   # will be inferred after transform
+        self.verbose = verbose
 
     # -----------------------
     # FIT
@@ -51,7 +52,8 @@ class DemandModel:
             train_data,
             valid_sets=[val_data],
             num_boost_round=5000,
-            callbacks=[lgb.early_stopping(100), lgb.log_evaluation(50)]
+            callbacks=[lgb.early_stopping(100, verbose=self.verbose),
+                       lgb.log_evaluation(100, show_stdv=False) if self.verbose else None]
         )
 
     # -----------------------
