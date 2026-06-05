@@ -12,7 +12,7 @@ The goal is to predict continuous demand values (0–1 range) using:
 - Road infrastructure characteristics
 - Landmark and vehicle constraints
 
-The final model achieves **high predictive accuracy (R² ≈ 0.97+)**, indicating strong learning of underlying demand patterns.
+The final model achieves **high predictive accuracy (R² ≈ 0.90+)**, indicating strong learning of underlying demand patterns.
 
 ---
 
@@ -93,13 +93,14 @@ Where:
 ---
 
 ### 4.4 Spatial Features
-- geohash (categorical)
-- geohash_te (target encoding version used during training)
-- weather_mean_demand (training statistic)
-- geohash_mean_demand (training statistic)
-- geohash_hour_mean (training statistic)
-- geohash_weather_mean (training statistic)
+- geohash (categorical or encoded depending on pipeline version)
+- geohash_te (smoothed target encoding of geohash)
 
+The geohash target encoding is computed using training data only:
+
+- Smoothed mean encoding with regularization
+- Prevents overfitting on rare locations
+- Used instead of raw geohash statistics
 ---
 
 ## 5. Model Details
@@ -121,14 +122,21 @@ Where:
 params = {
     "objective": "regression",
     "metric": "rmse",
-    "learning_rate": 0.03,
+    "learning_rate": 0.02,
+
     "num_leaves": 128,
-    "max_depth": -1,
+    "max_depth": 8,
     "min_data_in_leaf": 30,
-    "feature_fraction": 0.85,
-    "bagging_fraction": 0.8,
+
+    "feature_fraction": 0.6,
+    "bagging_fraction": 0.6,
     "bagging_freq": 5,
-    "lambda_l2": 1.0,
+
+    "lambda_l1": 2.0,
+    "lambda_l2": 8.0,
+
+    "min_gain_to_split": 0.01,
+
     "verbosity": -1
 }
 ```
@@ -145,24 +153,12 @@ params = {
 
 - GroupKFold used with geohash as grouping variable
 - Prevents spatial leakage across train/test splits
-- Early stopping used (200 rounds)
+- Early stopping used (100 rounds)
 - Model trained per fold and averaged
 
 ---
 
-## 8. Artifacts Used
-
-Saved artifacts for inference:
-
-- temp_median → missing value imputation
-- geohash_te_map → spatial prior knowledge
-- weather_mean_demand → weather baseline behavior
-- geohash_hour_mean → temporal-location interaction
-- geohash_weather_mean → spatial-weather interaction
-
----
-
-## 9. Inference Pipeline
+## 8. Inference Pipeline
 
 ### Steps:
 
@@ -171,21 +167,21 @@ Saved artifacts for inference:
 3. Apply cyclic transformations
 4. Generate demand_period and temp_bin
 5. Encode categorical variables
-6. Apply artifact-based mappings
+6. Apply trained feature pipeline (no target recomputation)
 7. Construct feature matrix
 8. Predict using trained LightGBM model
 
 ---
 
-## 10. How to Reproduce Results
+## 9. How to Reproduce Results
 
-### Step 1: Load artifacts and model
+### Step 1: Load pipeline and model
 
 ```python
 import joblib
 
 model = joblib.load("model.pkl")
-artifacts = joblib.load("artifacts.pkl")
+pipeline = joblib.load("pipeline.pkl")
 ```
 
 ---
@@ -193,7 +189,6 @@ artifacts = joblib.load("artifacts.pkl")
 ### Step 2: Initialize pipeline
 
 ```python
-pipeline = DemandFeaturePipeline(artifacts)
 model_wrapper = DemandModel(model, pipeline, features)
 ```
 
@@ -223,7 +218,7 @@ predictions = model_wrapper.predict(test_df)
 
 ---
 
-## 11. Key Success Factors
+## 10. Key Success Factors
 
 - Strong temporal cyclic encoding
 - Geohash-based spatial representation
@@ -234,9 +229,10 @@ predictions = model_wrapper.predict(test_df)
 
 ---
 
-## 12. Final Outcome
+## 11. Final Outcome
 
-- Model achieves ~97% R² score
+- Model achieves strong validation performance (R² score ~0.9058 CV)
+- Test performance ~0.9055 using random split strategy
 - Captures nonlinear spatio-temporal demand patterns
 - Robust inference pipeline suitable for deployment
 
@@ -244,6 +240,8 @@ predictions = model_wrapper.predict(test_df)
 
 ## 13. Notes
 
-- Do NOT recompute target-based features during inference
-- Ensure categorical consistency between train/test
-- Maintain artifact integrity for reproducibility
+- Do NOT recompute any target-based encodings during inference
+- geohash_te must come only from training artifacts
+- Never use raw geohash statistics (mean/hour/weather splits) in production
+- Ensure identical feature order during training and inference
+- Any mismatch in categorical encoding will degrade performance significantly
