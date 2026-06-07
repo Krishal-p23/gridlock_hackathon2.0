@@ -1,7 +1,5 @@
 import lightgbm as lgb
-
 from feature_pipeline import DemandFeaturePipeline
-
 
 class DemandModel:
 
@@ -9,7 +7,7 @@ class DemandModel:
         self.pipeline = DemandFeaturePipeline()
         self.model = None
         self.params = params
-        self.cat_cols = None   # will be inferred after transform
+        self.cat_cols = None
         self.verbose = verbose
 
     # -----------------------
@@ -45,13 +43,16 @@ class DemandModel:
             categorical_feature=self.cat_cols
         )
 
+        callbacks=[lgb.early_stopping(100, verbose=self.verbose)]
+        if self.verbose:
+            callbacks.append(lgb.log_evaluation(100, show_stdv=True))
+        
         self.model = lgb.train(
             self.params,
             train_data,
             valid_sets=[val_data],
             num_boost_round=5000,
-            callbacks=[lgb.early_stopping(100, verbose=self.verbose),
-                       lgb.log_evaluation(100, show_stdv=False) if self.verbose else None]
+            callbacks=callbacks
         )
 
     # -----------------------
