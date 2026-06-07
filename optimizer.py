@@ -1,91 +1,266 @@
 import optuna
 import numpy as np
-from sklearn.model_selection import KFold
-from sklearn.metrics import r2_score
+
 from tqdm import tqdm
 
-from model import DemandModel
+from sklearn.model_selection import KFold
+from sklearn.metrics import r2_score
 
-def objective(trial, df, params_base):
+from demand_model import DemandModel
 
-    # -----------------------
-    # 1. Sample hyperparameters
-    # -----------------------
+
+# --------------------------------------------------
+# PARAMETER SAMPLER
+# --------------------------------------------------
+def sample_parameters(
+    trial,
+    params_base,
+    search_space
+):
+    """
+    Generic Optuna parameter sampler.
+
+    search_space format:
+
+    {
+        "learning_rate": {
+            "type": "float",
+            "low": 0.005,
+            "high": 0.05,
+            "log": True
+        },
+
+        "num_leaves": {
+            "type": "int",
+            "low": 16,
+            "high": 256
+        }
+    }
+    """
+
     params = params_base.copy()
 
-    params.update({
-        "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.05, log=True),
-        "num_leaves": trial.suggest_int("num_leaves", 16, 256),
-        "max_depth": trial.suggest_int("max_depth", 3, 12),
-        "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 20, 200),
+    for param_name, cfg in search_space.items():
 
-        "feature_fraction": trial.suggest_float("feature_fraction", 0.5, 1.0),
-        "bagging_fraction": trial.suggest_float("bagging_fraction", 0.5, 1.0),
-        "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
+        param_type = cfg["type"]
 
-        "lambda_l1": trial.suggest_float("lambda_l1", 0.0, 10.0),
-        "lambda_l2": trial.suggest_float("lambda_l2", 0.0, 20.0),
+        if param_type == "float":
 
-        "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.0, 1.0),
-    })
+            params[param_name] = trial.suggest_float(
+                param_name,
+                cfg["low"],
+                cfg["high"],
+                log=cfg.get("log", False)
+            )
 
-    # -----------------------
-    # 2. CV setup
-    # -----------------------
-    kf = KFold(n_splits=5,
-               shuffle=True,
-               random_state=42)
+        elif param_type == "int":
+
+            params[param_name] = trial.suggest_int(
+                param_name,
+                cfg["low"],
+                cfg["high"]
+            )
+
+        elif param_type == "categorical":
+
+            params[param_name] = trial.suggest_categorical(
+                param_name,
+                cfg["choices"]
+            )
+
+        else:
+
+            raise ValueError(
+                f"Unsupported parameter type: {param_type}"
+            )
+
+    return params
+
+
+# --------------------------------------------------
+# OBJECTIVE
+# --------------------------------------------------
+def objective(
+    trial,
+    df,
+    estimator_class,
+    params_base,
+    search_space,
+    fit_config,
+    scoring_fn,
+    cv,
+    feature_pipeline=None,
+    verbose=False
+):
+
+    params = sample_parameters(
+        trial,
+        params_base,
+        search_space
+    )
+
+    scores = []
 
     y = df["demand"]
     x = df.drop(columns=["demand"])
 
-    scores = []
-
-    # -----------------------
-    # 3. Cross validation loop
-    # -----------------------
-    for train_idx, val_idx in kf.split(x, y,):
+    for fold_idx, (train_idx, val_idx) in enumerate(
+        cv.split(x, y)
+    ):
 
         train_df = df.iloc[train_idx].copy()
+
         val_df = df.iloc[val_idx].copy()
 
-        model = DemandModel(params, verbose=False)
+        model = DemandModel(
+            estimator_class=estimator_class,
+            params=params,
+            fit_config=fit_config,
+            feature_pipeline=feature_pipeline,
+            verbose=verbose
+        )
 
-        model.fit(train_df, val_df)
+        model.fit(
+            train_df,
+            val_df
+        )
 
-        preds = model.predict(val_df)
+        preds = model.predict(
+            val_df
+        )
 
-        score = r2_score(val_df["demand"], preds)
+        score = scoring_fn(
+            val_df["demand"],
+            preds
+        )
+
         scores.append(score)
 
-    return np.mean(scores)
+        trial.report(
+            np.mean(scores),
+            fold_idx
+        )
 
-def tune(df, params_base, n_trials=50):
+        if trial.should_prune():
 
-    study = optuna.create_study(
-        direction="maximize",
-        pruner=optuna.pruners.MedianPruner(n_warmup_steps=5)
+            raise optuna.TrialPruned()
+
+    return float(np.mean(scores))
+
+
+# --------------------------------------------------
+# TUNE
+# --------------------------------------------------
+def tune(
+    df,
+    estimator_class,
+    search_space,
+    params_base=None,
+    fit_config=None,
+    feature_pipeline=None,
+    scoring_fn=r2_score,
+    n_trials=50,
+    n_splits=5,
+    random_state=42,
+    direction="maximize",
+    verbose=False
+):
+    """
+    Generic Optuna tuner.
+
+    Parameters
+    ----------
+    df : DataFrame
+
+    estimator_class :
+        LGBMRegressor,
+        XGBRegressor,
+        CatBoostRegressor,
+        RandomForestRegressor,
+        etc.
+
+    search_space : dict
+        Hyperparameter search space
+
+    params_base : dict
+        Fixed parameters
+
+    fit_config : dict
+        Extra fit() arguments
+
+    scoring_fn : callable
+        r2_score,
+        mean_absolute_error,
+        etc.
+    """
+
+    params_base = params_base or {}
+    fit_config = fit_config or {}
+
+    cv = KFold(
+        n_splits=n_splits,
+        shuffle=True,
+        random_state=random_state
     )
 
-    pbar = tqdm(total=n_trials,
-                desc="Optuna Tuning",
-                leave=True,
-                dynamic_ncols=True
-                )
+    study = optuna.create_study(
+        direction=direction,
+        pruner=optuna.pruners.MedianPruner(
+            n_warmup_steps=2
+        )
+    )
 
-    def callback(study, trial):
+    pbar = tqdm(
+        total=n_trials,
+        desc="Optuna Tuning",
+        leave=True,
+        dynamic_ncols=True
+    )
+
+    def callback(
+        study,
+        trial
+    ):
         pbar.update(1)
-        pbar.set_postfix(best=round(study.best_value, 4) if study.best_value else None)
 
-    study.optimize(lambda trial: 
-                   objective(trial, df, params_base),
-                    n_trials=n_trials,
-                    callbacks=[callback]
-                    )
-    
+        if len(study.trials) > 0:
+
+            pbar.set_postfix(
+                best=round(
+                    study.best_value,
+                    5
+                )
+            )
+
+    study.optimize(
+        lambda trial: objective(
+            trial=trial,
+            df=df,
+            estimator_class=estimator_class,
+            params_base=params_base,
+            search_space=search_space,
+            fit_config=fit_config,
+            scoring_fn=scoring_fn,
+            cv=cv,
+            feature_pipeline=feature_pipeline,
+            verbose=verbose
+        ),
+        n_trials=n_trials,
+        callbacks=[callback]
+    )
+
     pbar.close()
 
-    print("Best R2:", study.best_value)
-    print("Best params:", study.best_params)
+    print(
+        "\nBest Score:",
+        study.best_value
+    )
+
+    print(
+        "\nBest Parameters:"
+    )
+
+    for k, v in study.best_params.items():
+        print(f"{k}: {v}")
 
     return study
